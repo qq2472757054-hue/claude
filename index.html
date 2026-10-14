@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>准绳 · 利润核算</title>
+<link rel="icon" href="data:,">
+<script>
+/* ================================================================
+ * 各市场默认值（2026年10月）。以后改默认值只需改这里。
+ * rate：1 单位当地货币 = ? 人民币（2026年10月13日）
+ * commission：平台佣金 %；txnFee：交易手续费 %
+ * tax.type：none 不扣税 / vat 售价含税 / mx 墨西哥综合税费
+ * ================================================================ */
+const MARKETS_UPDATED = '2026年10月';
+const MARKETS = {
+  US: { name: '美国', currency: 'USD', curName: '美元', rate: 6.7298, commission: 6, txnFee: 0,
+        tax: { type: 'none', note: '售价不含税（销售税由平台向买家代收），不扣税' } },
+  MX: { name: '墨西哥', currency: 'MXN', curName: '墨西哥比索', rate: 0.3663, commission: 8, txnFee: 0,
+        tax: { type: 'mx', rfcRate: 30, noRfcRate: 60, commissionIva: true, ivaRate: 16,
+               note: '按售价扣综合税费；有 RFC 默认 30%，没有默认 60%' } },
+  EU: { name: '欧洲（西班牙）', currency: 'EUR', curName: '欧元', rate: 7.4935, commission: 9, txnFee: 0,
+        tax: { type: 'vat', rate: 21, note: '售价含增值税，先换算成不含税价' } },
+  SEA: { name: '东南亚', defaultCountry: 'ID', countries: {
+    ID: { name: '印尼',     currency: 'IDR', curName: '印尼盾',     rate: 0.000373, commission: 7,  txnFee: 0,    tax: { type: 'vat', rate: 12 } },
+    TH: { name: '泰国',     currency: 'THB', curName: '泰铢',       rate: 0.1990,   commission: 8,  txnFee: 3.21, tax: { type: 'vat', rate: 7 } },
+    MY: { name: '马来西亚', currency: 'MYR', curName: '林吉特',     rate: 1.6450,   commission: 10, txnFee: 3.78, tax: { type: 'vat', rate: 10 } },
+    PH: { name: '菲律宾',   currency: 'PHP', curName: '菲律宾比索', rate: 0.1066,   commission: 6,  txnFee: 2.24, tax: { type: 'vat', rate: 12 } },
+    VN: { name: '越南',     currency: 'VND', curName: '越南盾',     rate: 0.000258, commission: 10, txnFee: 6,    tax: { type: 'vat', rate: 10 } },
+    SG: { name: '新加坡',   currency: 'SGD', curName: '新加坡元',   rate: 5.2242,   commission: 7,  txnFee: 3.27, tax: { type: 'vat', rate: 9 } },
+  } },
+};
+
+/* 成本分组与默认项。cur：CNY 人民币 / LOCAL 当地货币；basis：piece 按件 / box 按箱 */
+const COST_GROUPS = [
+  { id: 'goods',     name: '商品' },
+  { id: 'domestic',  name: '国内段' },
+  { id: 'customs',   name: '清关' },
+  { id: 'overseas',  name: '海外段' },
+  { id: 'warehouse', name: '海外仓' },
+  { id: 'labor',     name: '人工' },
+];
+const DEFAULT_COSTS = [
+  { key: 'pack',        group: 'goods',     name: '包装费',                     cur: 'CNY',   basis: 'piece' },
+  { key: 'export',      group: 'domestic',  name: '国内出口报关费',             cur: 'CNY',   basis: 'box' },
+  { key: 'freightDom',  group: 'domestic',  name: '货代单件运费（国内段）',     cur: 'CNY',   basis: 'piece' },
+  { key: 'boxMark',     group: 'domestic',  name: '国内贴箱唛',                 cur: 'CNY',   basis: 'box' },
+  { key: 'skuLabel',    group: 'domestic',  name: '贴 SKU 标签',                cur: 'CNY',   basis: 'piece' },
+  { key: 'material',    group: 'domestic',  name: '单独包装耗材',               cur: 'CNY',   basis: 'piece' },
+  { key: 'clearance',   group: 'customs',   name: '目的地清关费（货代按箱报价）', cur: 'CNY',   basis: 'box' },
+  { key: 'freightOver', group: 'overseas',  name: '货代单件运费（海外段）',     cur: 'LOCAL', basis: 'piece' },
+  { key: 'rent',        group: 'warehouse', name: '仓库租赁分摊',               cur: 'LOCAL', basis: 'piece' },
+  { key: 'unload',      group: 'warehouse', name: '入库：拆柜卸货',             cur: 'LOCAL', basis: 'box' },
+  { key: 'shelve',      group: 'warehouse', name: '入库：分拣上架',             cur: 'LOCAL', basis: 'piece' },
+  { key: 'outbound',    group: 'warehouse', name: '出库费',                     cur: 'LOCAL', basis: 'piece' },
+  { key: 'labor',       group: 'labor',     name: '人工分摊',                   cur: 'CNY',   basis: 'piece' },
+];
+</script>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --line: #e3e6eb; --line-strong: #cfd4db;
+  --text: #1f2933; --muted: #6b7682; --accent: #2563eb; --accent-soft: #e8efff;
+  --good: #0f7b4b; --good-soft: #e7f6ee; --bad: #c62828; --bad-soft: #fdecec;
+  --bar: #8aa8e8; --radius: 8px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+header { position: sticky; top: 0; z-index: 10; background: var(--panel); border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 20px; }
+header h1 { font-size: 17px; margin: 0 12px 0 0; letter-spacing: 1px; }
+header h1 span { color: var(--muted); font-weight: normal; }
+.spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: #fff; padding: 5px 14px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line-strong); }
+.seg button.on { background: var(--accent); color: #fff; }
+.btn { border: 1px solid var(--line-strong); background: #fff; border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.08); color: #fff; }
+.btn.small { padding: 2px 8px; font-size: 12px; }
+.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+.btn:disabled { opacity: .5; cursor: default; }
+select, input[type=text], input[type=number], input[type=password] {
+  border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 8px; background: #fff; min-width: 0; }
+input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+input.num { text-align: right; font-variant-numeric: tabular-nums; }
+input[type=number]::-webkit-inner-spin-button { opacity: .4; }
+main { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px; padding: 20px;
+  max-width: 1360px; margin: 0 auto; align-items: start; }
+@media (max-width: 920px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 10px 16px; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+details.sec { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 12px; }
+details.sec > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 8px; }
+details.sec > summary::-webkit-details-marker { display: none; }
+details.sec > summary::before { content: '▸'; color: var(--muted); transition: transform .15s; }
+details.sec[open] > summary::before { transform: rotate(90deg); }
+details.sec > summary .sum { margin-left: auto; font-weight: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sec-body { padding: 4px 14px 14px; }
+.field { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; align-items: center; padding: 5px 0; }
+.field > label { color: var(--muted); }
+.field .ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.field .ctl input.num { width: 150px; }
+.hint { color: var(--muted); font-size: 12px; }
+.req { color: var(--bad); }
+.cost-head, .cost-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px 104px 76px 46px; gap: 6px; align-items: center; }
+.cost-head { color: var(--muted); font-size: 12px; padding: 2px 0; }
+.cost-head span:nth-child(2) { text-align: right; }
+.cost-row { padding: 3px 0; }
+.cost-row input[type=text] { width: 100%; }
+.cost-row input.num { width: 100%; }
+@media (max-width: 560px) {
+  .field { grid-template-columns: 1fr; gap: 4px; }
+  .cost-head { display: none; }
+  .cost-row { grid-template-columns: 1fr 1fr; border-bottom: 1px dashed var(--line); padding: 6px 0; }
+  .cost-row input[type=text] { grid-column: 1 / -1; }
+}
+.add-row { margin-top: 6px; }
+.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.note { background: #f3f5f8; border-radius: 6px; padding: 6px 10px; color: var(--muted); font-size: 12px; margin: 4px 0; }
+
+/* 结果区 */
+.results { position: sticky; top: 70px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
+.card h2 { font-size: 15px; margin: 0 0 10px; }
+.kpi { border-radius: var(--radius); padding: 16px; background: var(--good-soft); border: 1px solid #c7e9d6; margin-bottom: 12px; }
+.kpi.neg { background: var(--bad-soft); border-color: #f3c4c4; }
+.kpi.neg .big, .kpi.neg .mid { color: var(--bad); }
+.kpi .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 4px 0; }
+.kpi .lbl { color: var(--muted); }
+.kpi .big { font-size: 28px; font-weight: 700; color: var(--good); font-variant-numeric: tabular-nums; text-align: right; }
+.kpi .mid { font-size: 20px; font-weight: 600; color: var(--good); font-variant-numeric: tabular-nums; text-align: right; }
+.kpi .plain { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; color: var(--text); }
+.kpi .sub { font-size: 13px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.kpi hr { border: 0; border-top: 1px solid rgba(0,0,0,.08); margin: 6px 0; }
+.errors { background: #fff8e6; border: 1px solid #f1dca4; color: #7a5a00; border-radius: var(--radius); padding: 12px 16px; margin-bottom: 12px; }
+.errors.bad { background: var(--bad-soft); border-color: #f3c4c4; color: var(--bad); }
+.errors ul { margin: 4px 0 0; padding-left: 18px; }
+table.kv { width: 100%; border-collapse: collapse; }
+table.kv td { padding: 4px 0; border-bottom: 1px solid var(--line); }
+table.kv td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.bars { display: flex; flex-direction: column; gap: 6px; }
+.bar-row { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr) 92px 56px; gap: 8px; align-items: center; font-size: 13px; }
+.bar-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-track { background: #f0f2f5; border-radius: 4px; height: 12px; overflow: hidden; }
+.bar-fill { background: var(--bar); height: 100%; border-radius: 4px; }
+.bar-row.profit .bar-fill { background: #7cc9a1; }
+.bar-row .v, .bar-row .p { text-align: right; font-variant-numeric: tabular-nums; }
+.bar-row .p { color: var(--muted); }
+@media (max-width: 560px) { .bar-row { grid-template-columns: minmax(0, 1fr) 80px 50px; } .bar-track { grid-column: 1 / -1; grid-row: 2; } }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ai-box { margin-top: 12px; white-space: pre-wrap; line-height: 1.7; }
+.ai-box.err { color: var(--bad); }
+.ai-box.loading { color: var(--muted); }
+.hist-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: center; }
+.hist-item:last-child { border-bottom: 0; }
+.hist-item .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-item .m { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.hist-item .neg { color: var(--bad); }
+.empty { color: var(--muted); font-size: 13px; }
+
+/* 设置弹窗 */
+.modal-bg { position: fixed; inset: 0; background: rgba(15, 23, 42, .35); display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+.modal-bg.show { display: flex; }
+.modal { background: #fff; border-radius: 10px; width: 100%; max-width: 460px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,.15); }
+.modal h2 { margin: 0 0 12px; font-size: 16px; }
+.modal .field { grid-template-columns: 100px minmax(0, 1fr); }
+.modal .field input, .modal .field select { width: 100%; }
+.modal .foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.saved { color: var(--good); font-size: 12px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #1f2933; color: #fff;
+  padding: 8px 16px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 60; }
+.toast.show { opacity: .92; }
+</style>
+</head>
+<body>
+<header>
+  <h1>准绳 <span>· 利润核算</span></h1>
+  <label>市场 <select id="marketSel"></select></label>
+  <select id="countrySel" hidden></select>
+  <div class="seg" id="modeSeg">
+    <button data-mode="forward">正算（填售价）</button>
+    <button data-mode="reverse">反算（填利润率）</button>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn" id="settingsBtn">设置</button>
+</header>
+
+<main>
+  <section id="form"></section>
+  <section class="results">
+    <div id="resultArea"></div>
+    <div class="card">
+      <div class="actions">
+        <button class="btn" id="copyBtn">复制结果</button>
+        <button class="btn" id="aiBtn">AI 解读</button>
+        <button class="btn primary" id="saveBtn">保存本次核算</button>
+      </div>
+      <div class="ai-box" id="aiBox" hidden></div>
+    </div>
+    <div class="card">
+      <h2>历史记录</h2>
+      <div id="histList" class="empty">加载中…</div>
+    </div>
+  </section>
+</main>
+
+<div class="modal-bg" id="settingsModal">
+  <div class="modal" role="dialog" aria-label="设置">
+    <h2>设置（AI 解读）</h2>
+    <div class="field">
+      <label for="setKey">ToAPIs Key</label>
+      <div class="ctl" style="flex-direction:column;align-items:stretch;gap:2px">
+        <input type="password" id="setKey" autocomplete="off" placeholder="粘贴 Key">
+        <span id="keyState" class="hint"></span>
+      </div>
+    </div>
+    <div class="field">
+      <label for="setEndpoint">接口地址</label>
+      <select id="setEndpoint">
+        <option value="toapis.cn">toapis.cn（中国大陆网络）</option>
+        <option value="toapis.com">toapis.com</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="setModel">模型名</label>
+      <input type="text" id="setModel" placeholder="gemini-3.7-flash-official">
+    </div>
+    <p class="hint">Key 只保存在本机用户目录，不会显示在网页上，也不会发给除 ToAPIs 以外的地方。计算功能不需要 Key。</p>
+    <div class="foot">
+      <button class="btn danger" id="clearKeyBtn">清除 Key</button>
+      <div class="spacer"></div>
+      <button class="btn" id="settingsCancel">关闭</button>
+      <button class="btn primary" id="settingsSave">保存</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const DRAFT_KEY = 'zs_profit_draft_v1';
+let uid = 0;
+const newId = () => 'c' + Date.now().toString(36) + (uid++).toString(36);
+
+/* ---------- 工具 ---------- */
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function num(v) { const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '')); return Number.isFinite(n) ? n : NaN; }
+function opt(v) { const n = num(v); return Number.isFinite(n) ? n : 0; }   // 选填项：空＝0
+function blank(v) { return v == null || String(v).trim() === ''; }
+function money(n) {
+  if (!Number.isFinite(n)) return '—';
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function pct(n) { return Number.isFinite(n) ? (n * 100).toFixed(2) + '%' : '—'; }
+function clone(o) { return JSON.parse(JSON.stringify(o)); }
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+/* ---------- 市场 ---------- */
+function marketInfo(s) {
+  const m = MARKETS[s.market];
+  if (s.market === 'SEA') {
+    const c = m.countries[s.country] || m.countries[m.defaultCountry];
+    return Object.assign({ label: m.name + '·' + c.name }, c);
+  }
+  return Object.assign({ label: m.name }, m);
+}
+
+function applyMarketDefaults(s) {
+  const mi = marketInfo(s);
+  s.rate = String(mi.rate);
+  s.commission = String(mi.commission);
+  s.txnFee = mi.txnFee ? String(mi.txnFee) : '';
+  if (mi.tax.type === 'vat') s.vatRate = String(mi.tax.rate);
+  if (mi.tax.type === 'mx') {
+    s.rfc = true;
+    s.mxTax = String(mi.tax.rfcRate);
+    s.mxIva = mi.tax.commissionIva;
+  }
+}
+
+function defaultCostItem(d) {
+  return { id: newId(), key: d.key, group: d.group, name: d.name, amount: '', cur: d.cur, basis: d.basis };
+}
+
+function defaultState() {
+  const s = {
+    name: '', market: 'US', country: MARKETS.SEA.defaultCountry, mode: 'forward',
+    price: '', target: '', purchase: '', rate: '', perBox: '1',
+    costs: DEFAULT_COSTS.map(defaultCostItem),
+    commission: '', creator: '', txnFee: '', vatRate: '', rfc: true, mxTax: '', mxIva: true,
+    returnRate: '0', reship: '',
+  };
+  applyMarketDefaults(s);
+  return s;
+}
+
+/* 旧数据缺字段时补全，避免恢复历史时出错 */
+function normalizeState(raw) {
+  const s = Object.assign(defaultState(), raw || {});
+  if (!MARKETS[s.market]) s.market = 'US';
+  if (!MARKETS.SEA.countries[s.country]) s.country = MARKETS.SEA.defaultCountry;
+  if (s.mode !== 'reverse') s.mode = 'forward';
+  if (!Array.isArray(s.costs)) s.costs = DEFAULT_COSTS.map(defaultCostItem);
+  s.costs = s.costs.filter((c) => c && COST_GROUPS.some((g) => g.id === c.group)).map((c) => ({
+    id: c.id || newId(), key: c.key || null, group: c.group, name: String(c.name || ''),
+    amount: c.amount == null ? '' : String(c.amount),
+    cur: c.cur === 'LOCAL' ? 'LOCAL' : 'CNY', basis: c.basis === 'box' ? 'box' : 'piece',
+  }));
+  return s;
+}
+
+/* ---------- 计算（全部用公式，不循环试算） ---------- */
+function compute(s) {
+  const mi = marketInfo(s);
+  const errors = [];
+  const r = num(s.rate), box = num(s.perBox), purchase = num(s.purchase);
+  if (!(r > 0)) errors.push('请填写汇率（大于 0）');
+  if (!(box > 0)) errors.push('每箱件数要大于 0');
+  if (!(purchase >= 0)) errors.push('请填写采购价');
+
+  // 1. 单件落地成本 C（人民币）
+  const lines = [];
+  let costSum = 0;
+  for (const c of s.costs) {
+    const amt = opt(c.amount);
+    const cny = amt * (c.cur === 'LOCAL' ? r : 1) / (c.basis === 'box' ? box : 1);
+    if (Number.isFinite(cny)) { costSum += cny; lines.push({ name: c.name || '自定义项', cny }); }
+  }
+  const C = (purchase >= 0 ? purchase : 0) + costSum;
+
+  // 比例系数：N = P × a；比例费用（当地币）＝ P × (1 − K)
+  const t = mi.tax;
+  let a = 1, taxLabel = '';
+  if (t.type === 'vat') { const v = opt(s.vatRate) / 100; a = 1 / (1 + v); taxLabel = '售价含税 ' + (v * 100).toFixed(2).replace(/\.?0+$/, '') + '%'; }
+  if (t.type === 'mx')  { const x = opt(s.mxTax) / 100;  a = 1 - x;       taxLabel = '综合税费 ' + (x * 100).toFixed(2).replace(/\.?0+$/, '') + '%'; }
+  const iva = t.type === 'mx' && s.mxIva ? 1 + t.ivaRate / 100 : 1;
+  const c = opt(s.commission) / 100, d = opt(s.creator) / 100, f = opt(s.txnFee) / 100;
+  const ret = opt(s.returnRate) / 100, reship = opt(s.reship);
+  const K = a * (1 - c * iva - d) - f;              // 每 1 当地币售价扣完比例费用后剩下的部分
+  const F = C * (1 + ret) + ret * reship * r;        // 与售价无关的固定成本（人民币）
+
+  let P;
+  let unreachable = false;
+  if (s.mode === 'forward') {
+    P = num(s.price);
+    if (!(P > 0)) errors.push('请填写售价（大于 0）');
+  } else {
+    const m = num(s.target) / 100;
+    if (blank(s.target) || !Number.isFinite(m)) errors.push('请填写目标利润率 %');
+    else if (K - m <= 0) {
+      unreachable = true;
+      errors.push('这个利润率达不到：佣金、税费等按售价比例扣的费用已占售价 ' + pct(1 - K) +
+                  '，加上目标利润率 ' + pct(m) + ' 已经 ≥ 100%。');
+    } else if (!(F > 0)) errors.push('请先填写采购价或成本，才能反算售价');
+    else if (errors.length === 0) P = F / (r * (K - m));
+  }
+  if (errors.length) return { ok: false, errors, unreachable, mi };
+
+  // 2~7. 按售价 P 展开各项
+  const N = P * a;
+  const commission = N * c * iva, creator = N * d, txn = P * f;
+  const afterSales = ret * (C + reship * r);
+  const profit = N * r - (commission + creator + txn) * r - C - afterSales;
+  const revenue = P * r;
+  const margin = profit / revenue;
+  const breakEven = K > 0 ? F / (r * K) : null;      // 8. 保本价
+
+  return {
+    ok: true, mi, r, P, N, C, purchase, lines, commission, creator, txn, afterSales,
+    tax: (P - N) * r, taxLabel, iva, profit, profitLocal: profit / r, margin, breakEven, revenue, K, F,
+  };
+}
+
+/* 成本构成（人民币／件），从大到小 */
+function breakdown(s, res) {
+  const r = res.r;
+  const items = [{ name: '采购价', v: res.purchase }];
+  res.lines.forEach((l) => items.push({ name: l.name, v: l.cny }));
+  if (res.taxLabel) items.push({ name: '税费（' + res.taxLabel + '）', v: res.tax });
+  items.push({ name: res.iva > 1 ? '平台佣金（含 IVA）' : '平台佣金', v: res.commission * r });
+  items.push({ name: '达人佣金', v: res.creator * r });
+  items.push({ name: '交易手续费', v: res.txn * r });
+  items.push({ name: '售后成本', v: res.afterSales });
+  return items.filter((i) => Math.abs(i.v) > 1e-9).sort((x, y) => y.v - x.v);
+}
+
+/* ---------- 状态 ---------- */
+let state = loadDraft() || defaultState();
+const openSecs = { basic: true, goods: true, domestic: true, customs: true, overseas: true, warehouse: true, labor: true, platform: true, after: true };
+
+function loadDraft() {
+  try { const raw = localStorage.getItem(DRAFT_KEY); return raw ? normalizeState(JSON.parse(raw)) : null; } catch (e) { return null; }
+}
+function saveDraft() { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(state)); } catch (e) { /* 忽略 */ } }
+
+/* ---------- 左侧表单 ---------- */
+function numInput(path, val, attrs) {
+  return '<input class="num" type="number" step="any" data-k="' + path + '" value="' + esc(val) + '"' + (attrs || '') + '>';
+}
+function field(label, ctl, hint, required) {
+  return '<div class="field"><label>' + label + (required ? ' <span class="req">*</span>' : '') + '</label><div class="ctl">' + ctl +
+         (hint ? '<span class="hint">' + hint + '</span>' : '') + '</div></div>';
+}
+function section(id, title, body, sum) {
+  return '<details class="sec" data-sec="' + id + '"' + (openSecs[id] ? ' open' : '') + '><summary>' + title +
+         (sum ? '<span class="sum" data-sum="' + id + '">' + sum + '</span>' : '') + '</summary><div class="sec-body">' + body + '</div></details>';
+}
+
+function renderForm() {
+  const s = state, mi = marketInfo(s), t = mi.tax;
+  let h = '';
+
+  // 基本信息
+  let b = field('商品名', '<input type="text" data-k="name" value="' + esc(s.name) + '" placeholder="保存历史时使用" style="width:240px">');
+  b += field('销售市场', '<b>' + esc(mi.label) + '</b><span class="hint">当地货币：' + esc(mi.curName) + ' ' + mi.currency + '（在顶部切换）</span>');
+  if (s.mode === 'forward') b += field('售价', numInput('price', s.price, ' min="0"') + '<span>' + esc(mi.curName) + '</span>', '', true);
+  else b += field('目标利润率', numInput('target', s.target) + '<span>%</span>', '利润 ÷ 售价', true);
+  b += field('采购价', numInput('purchase', s.purchase, ' min="0"') + '<span>元／件</span>', '', true);
+  b += field('汇率', '<span>1 ' + esc(mi.curName) + ' =</span>' + numInput('rate', s.rate, ' min="0"') + '<span>人民币</span>',
+             '尽量查询今日汇率（默认 ' + mi.rate + '）', true);
+  b += field('每箱件数', numInput('perBox', s.perBox, ' min="1" step="1"') + '<span>件</span>', '按箱计费的成本会除以它摊到每件', true);
+  h += section('basic', '基本信息', b);
+
+  // 成本项
+  h += '<div class="toolbar"><b>成本项</b><span class="hint">全部选填；按箱计费自动除以每箱件数</span><span class="spacer"></span>' +
+       '<button class="btn small" data-act="restore">恢复默认项</button></div>';
+  const curOpts = (v) => '<option value="CNY"' + (v === 'CNY' ? ' selected' : '') + '>人民币</option>' +
+                         '<option value="LOCAL"' + (v === 'LOCAL' ? ' selected' : '') + '>' + esc(mi.curName) + '</option>';
+  const basisOpts = (v) => '<option value="piece"' + (v === 'piece' ? ' selected' : '') + '>按件</option>' +
+                           '<option value="box"' + (v === 'box' ? ' selected' : '') + '>按箱</option>';
+  for (const g of COST_GROUPS) {
+    const rows = s.costs.filter((c) => c.group === g.id);
+    let body = '<div class="cost-head"><span>名称</span><span>金额</span><span>币种</span><span>计费</span><span></span></div>';
+    if (!rows.length) body += '<div class="empty" style="padding:4px 0">（本组没有成本项）</div>';
+    for (const c of rows) {
+      body += '<div class="cost-row" data-id="' + c.id + '">' +
+        '<input type="text" data-f="name" value="' + esc(c.name) + '" placeholder="项目名称">' +
+        '<input class="num" type="number" step="any" data-f="amount" value="' + esc(c.amount) + '" placeholder="0.00">' +
+        '<select data-f="cur">' + curOpts(c.cur) + '</select>' +
+        '<select data-f="basis">' + basisOpts(c.basis) + '</select>' +
+        '<button class="btn small danger" data-act="del" title="删除这一项">删除</button></div>';
+    }
+    body += '<div class="add-row"><button class="btn small" data-act="add" data-group="' + g.id + '">＋ 添加自定义项</button></div>';
+    h += section(g.id, g.name, body, ' ');
+  }
+
+  // 平台与税费
+  let p = '<div class="note">' + esc(mi.label) + '：' + esc(t.note || ('售价含税，默认 ' + t.rate + '%，先换算成不含税价')) +
+          '。默认值更新于 ' + MARKETS_UPDATED + '，可按实际修改。</div>';
+  p += field('平台佣金', numInput('commission', s.commission) + '<span>%</span>', '按不含税收入计');
+  if (t.type === 'vat') p += field('售价含税率', numInput('vatRate', s.vatRate) + '<span>%</span>', '不含税价 = 售价 ÷ (1 + 税率)');
+  if (t.type === 'mx') {
+    p += field('RFC 税号', '<label><input type="checkbox" data-k="rfc"' + (s.rfc ? ' checked' : '') + '> 有 RFC 税号</label>',
+               '有 RFC 默认 ' + t.rfcRate + '%，没有默认 ' + t.noRfcRate + '%');
+    p += field('综合税费', numInput('mxTax', s.mxTax) + '<span>%</span>', '按售价计算');
+    p += field('佣金 IVA', '<label><input type="checkbox" data-k="mxIva"' + (s.mxIva ? ' checked' : '') + '> 佣金另收 ' + t.ivaRate + '% IVA</label>');
+  }
+  p += field('达人佣金', numInput('creator', s.creator, ' placeholder="选填"') + '<span>%</span>', '按不含税收入计');
+  p += field('交易手续费', numInput('txnFee', s.txnFee, ' placeholder="选填"') + '<span>%</span>', '按售价计');
+  h += section('platform', '平台与税费', p);
+
+  // 售后
+  let rr = '';
+  for (let i = 0; i <= 10; i++) rr += '<option value="' + i + '"' + (String(i) === String(s.returnRate) ? ' selected' : '') + '>' + i + '%</option>';
+  let a = field('退货率', '<select data-k="returnRate">' + rr + '</select>');
+  a += field('重发运费', numInput('reship', s.reship, ' min="0" placeholder="选填"') + '<span>' + esc(mi.curName) + '／件</span>');
+  a += '<div class="note">退回的商品不二次销售，按“扔掉并给顾客重发”计算：售后成本 ＝ 退货率 ×（单件落地成本 ＋ 重发运费）。</div>';
+  h += section('after', '售后', a);
+
+  $('form').innerHTML = h;
+  updateGroupSums();
+}
+
+function updateGroupSums() {
+  const r = num(state.rate), box = num(state.perBox);
+  for (const g of COST_GROUPS) {
+    const el = document.querySelector('[data-sum="' + g.id + '"]');
+    if (!el) continue;
+    let sum = 0, n = 0;
+    for (const c of state.costs) {
+      if (c.group !== g.id) continue;
+      n++;
+      sum += opt(c.amount) * (c.cur === 'LOCAL' ? r : 1) / (c.basis === 'box' ? box : 1);
+    }
+    el.textContent = n ? (Number.isFinite(sum) ? '¥' + money(sum) + '／件' : '—') : '已清空';
+  }
+}
+
+function renderHeader() {
+  const ms = $('marketSel'), cs = $('countrySel');
+  ms.innerHTML = Object.keys(MARKETS).map((k) => '<option value="' + k + '"' + (k === state.market ? ' selected' : '') + '>' + MARKETS[k].name + '</option>').join('');
+  const cc = MARKETS.SEA.countries;
+  cs.innerHTML = Object.keys(cc).map((k) => '<option value="' + k + '"' + (k === state.country ? ' selected' : '') + '>' + cc[k].name + '</option>').join('');
+  cs.hidden = state.market !== 'SEA';
+  document.querySelectorAll('#modeSeg button').forEach((b) => b.classList.toggle('on', b.dataset.mode === state.mode));
+}
+
+/* ---------- 右侧结果 ---------- */
+let lastRes = null;
+function renderResults() {
+  const s = state, res = compute(s);
+  lastRes = res;
+  const mi = res.mi, cur = mi.curName;
+  const area = $('resultArea');
+  $('copyBtn').disabled = $('aiBtn').disabled = !res.ok;
+  if (!res.ok) {
+    area.innerHTML = '<div class="errors' + (res.unreachable ? ' bad' : '') + '"><b>' + (res.unreachable ? '这个利润率达不到' : '还差一点信息') +
+      '</b><ul>' + res.errors.map((e) => '<li>' + esc(e) + '</li>').join('') + '</ul></div>';
+    return;
+  }
+  const neg = res.profit < -1e-9;
+  let k = '<div class="kpi' + (neg ? ' neg' : '') + '">';
+  if (s.mode === 'reverse') {
+    k += '<div class="row"><span class="lbl">建议售价</span><div><div class="big">' + money(res.P) + ' ' + esc(cur) + '</div>' +
+         '<div class="sub">≈ ¥' + money(res.revenue) + '　目标利润率 ' + esc(s.target) + '%</div></div></div><hr>';
+  }
+  k += '<div class="row"><span class="lbl">每件利润</span><div><div class="' + (s.mode === 'reverse' ? 'mid' : 'big') + '">¥ ' + money(res.profit) + '</div>' +
+       '<div class="sub">' + money(res.profitLocal) + ' ' + esc(cur) + '</div></div></div>';
+  k += '<div class="row"><span class="lbl">利润率</span><div class="mid">' + pct(res.margin) + '</div></div>';
+  k += '<div class="row"><span class="lbl">保本价</span><div class="plain">' +
+       (res.breakEven == null ? '无法保本（比例费用 ≥ 100%）' : money(res.breakEven) + ' ' + esc(cur)) + '</div></div>';
+  k += '</div>';
+
+  const items = breakdown(s, res);
+  const max = Math.max(res.revenue, ...items.map((i) => Math.abs(i.v)), 1e-9);
+  let bars = '<div class="card"><h2>成本构成 <span class="hint">（每件，人民币；百分比为占售价）</span></h2><div class="bars">';
+  for (const i of items) {
+    bars += '<div class="bar-row"><span class="name" title="' + esc(i.name) + '">' + esc(i.name) + '</span>' +
+            '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(0, i.v / max * 100).toFixed(2) + '%"></div></div>' +
+            '<span class="v">¥' + money(i.v) + '</span><span class="p">' + pct(i.v / res.revenue) + '</span></div>';
+  }
+  bars += '<div class="bar-row profit"><span class="name"><b>利润</b></span>' +
+          '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(0, res.profit / max * 100).toFixed(2) + '%"></div></div>' +
+          '<span class="v"><b>¥' + money(res.profit) + '</b></span><span class="p">' + pct(res.margin) + '</span></div>';
+  bars += '</div></div>';
+
+  let kv = '<div class="card"><h2>核算明细</h2><table class="kv">';
+  const row = (l, v) => { kv += '<tr><td>' + l + '</td><td>' + v + '</td></tr>'; };
+  row('售价', money(res.P) + ' ' + esc(cur) + '　（¥' + money(res.revenue) + '）');
+  row('不含税收入 N', money(res.N) + ' ' + esc(cur) + '　（¥' + money(res.N * res.r) + '）');
+  row('单件落地成本 C（含采购价）', '¥' + money(res.C));
+  row('平台佣金' + (res.iva > 1 ? '（含 IVA）' : ''), money(res.commission) + ' ' + esc(cur));
+  if (res.creator) row('达人佣金', money(res.creator) + ' ' + esc(cur));
+  if (res.txn) row('交易手续费', money(res.txn) + ' ' + esc(cur));
+  row('售后成本', '¥' + money(res.afterSales));
+  kv += '</table></div>';
+
+  area.innerHTML = k + bars + kv;
+}
+
+function recalc() { renderResults(); updateGroupSums(); saveDraft(); }
+
+/* ---------- 表单事件 ---------- */
+const STRUCTURAL = new Set(['rfc']);
+$('form').addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.dataset.k) {
+    if (el.type === 'checkbox') return;   // 由 change 处理
+    state[el.dataset.k] = el.value;
+  } else if (el.dataset.f) {
+    const row = el.closest('.cost-row');
+    const c = row && state.costs.find((x) => x.id === row.dataset.id);
+    if (c) c[el.dataset.f] = el.value;
+  } else return;
+  recalc();
+});
+$('form').addEventListener('change', (e) => {
+  const el = e.target;
+  if (el.type === 'checkbox' && el.dataset.k) {
+    state[el.dataset.k] = el.checked;
+    if (el.dataset.k === 'rfc') {
+      const t = marketInfo(state).tax;
+      state.mxTax = String(el.checked ? t.rfcRate : t.noRfcRate);
+    }
+    if (STRUCTURAL.has(el.dataset.k)) renderForm();
+    recalc();
+  } else if (el.tagName === 'SELECT') {
+    if (el.dataset.k) state[el.dataset.k] = el.value;
+    recalc();
+  }
+});
+$('form').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const act = btn.dataset.act;
+  if (act === 'del') {
+    const id = btn.closest('.cost-row').dataset.id;
+    state.costs = state.costs.filter((c) => c.id !== id);
+  } else if (act === 'add') {
+    const g = btn.dataset.group;
+    state.costs.push({ id: newId(), key: null, group: g, name: '', amount: '', cur: 'CNY', basis: 'piece' });
+    openSecs[g] = true;
+  } else if (act === 'restore') {
+    // 把删掉的默认项按原顺序补回来；已有的项和自定义项保持不变
+    const have = new Map(state.costs.filter((c) => c.key).map((c) => [c.key, c]));
+    let added = 0;
+    const next = [];
+    for (const g of COST_GROUPS) {
+      for (const d of DEFAULT_COSTS.filter((x) => x.group === g.id)) {
+        if (have.has(d.key)) next.push(have.get(d.key));
+        else { next.push(defaultCostItem(d)); added++; }
+      }
+      state.costs.filter((c) => c.group === g.id && !c.key).forEach((c) => next.push(c));
+    }
+    state.costs = next;
+    toast(added ? '已恢复 ' + added + ' 个默认项' : '默认项都在，无需恢复');
+  }
+  renderForm();
+  recalc();
+  if (act === 'add') {
+    const rows = document.querySelectorAll('.cost-row');
+    const last = rows[rows.length - 1];
+    const sameGroup = [...rows].filter((r) => r.closest('[data-sec]').dataset.sec === btn.dataset.group);
+    const target = sameGroup[sameGroup.length - 1] || last;
+    if (target) target.querySelector('input[type=text]').focus();
+  }
+});
+$('form').addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (d.dataset && d.dataset.sec) openSecs[d.dataset.sec] = d.open;
+}, true);
+
+/* ---------- 顶部 ---------- */
+$('marketSel').addEventListener('change', (e) => {
+  state.market = e.target.value;
+  applyMarketDefaults(state);
+  renderAll();
+});
+$('countrySel').addEventListener('change', (e) => {
+  state.country = e.target.value;
+  applyMarketDefaults(state);
+  renderAll();
+});
+$('modeSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-mode]');
+  if (!b || b.dataset.mode === state.mode) return;
+  state.mode = b.dataset.mode;
+  renderAll();
+});
+
+function renderAll() { renderHeader(); renderForm(); recalc(); }
+
+/* ---------- 复制结果 ---------- */
+function resultText() {
+  const s = state, res = lastRes, mi = res.mi, cur = mi.curName;
+  const L = [];
+  L.push('【准绳 · 利润核算】' + (s.name ? s.name : ''));
+  L.push('市场：' + mi.label + '（' + cur + ' ' + mi.currency + '）　汇率：1 ' + cur + ' = ' + s.rate + ' 人民币　每箱件数：' + s.perBox);
+  if (s.mode === 'reverse') L.push('模式：反算　目标利润率：' + s.target + '%');
+  L.push('售价：' + money(res.P) + ' ' + cur + (s.mode === 'reverse' ? '（建议售价）' : ''));
+  L.push('采购价：¥' + money(res.purchase));
+  const filled = s.costs.filter((c) => opt(c.amount) !== 0);
+  if (filled.length) {
+    L.push('成本项：');
+    filled.forEach((c) => L.push('  - ' + (c.name || '自定义项') + '：' + c.amount + ' ' + (c.cur === 'LOCAL' ? cur : '人民币') + '／' + (c.basis === 'box' ? '箱' : '件')));
+  }
+  let tax = '';
+  if (mi.tax.type === 'vat') tax = '　售价含税 ' + s.vatRate + '%';
+  if (mi.tax.type === 'mx') tax = '　综合税费 ' + s.mxTax + '%（' + (s.rfc ? '有' : '无') + ' RFC）' + (s.mxIva ? '　佣金另收 IVA' : '');
+  L.push('平台佣金：' + (s.commission || 0) + '%　达人佣金：' + (s.creator || 0) + '%　交易手续费：' + (s.txnFee || 0) + '%' + tax);
+  L.push('退货率：' + s.returnRate + '%　重发运费：' + (s.reship || 0) + ' ' + cur + '／件');
+  L.push('—— 结果 ——');
+  L.push('不含税收入：' + money(res.N) + ' ' + cur);
+  L.push('单件落地成本：¥' + money(res.C));
+  L.push('每件利润：¥' + money(res.profit) + '（' + money(res.profitLocal) + ' ' + cur + '）');
+  L.push('利润率：' + pct(res.margin));
+  L.push('保本价：' + (res.breakEven == null ? '无法保本' : money(res.breakEven) + ' ' + cur));
+  L.push('成本构成（每件）：');
+  breakdown(s, res).forEach((i) => L.push('  - ' + i.name + '：¥' + money(i.v) + '（占售价 ' + pct(i.v / res.revenue) + '）'));
+  return L.join('\n');
+}
+$('copyBtn').addEventListener('click', async () => {
+  if (!lastRes || !lastRes.ok) return;
+  const text = resultText();
+  try { await navigator.clipboard.writeText(text); toast('已复制到剪贴板'); }
+  catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+    ta.remove(); toast(ok ? '已复制到剪贴板' : '复制失败，请手动选择复制');
+  }
+});
+
+/* ---------- 本地接口 ---------- */
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  let resp;
+  try { resp = await fetch(path, opts); }
+  catch (e) { throw new Error('连不上本地服务，请确认启动窗口没有关闭'); }
+  let data = null;
+  try { data = await resp.json(); } catch (e) { /* 忽略 */ }
+  if (!resp.ok || !data) throw new Error((data && data.error) || ('本地服务出错（' + resp.status + '）'));
+  return data;
+}
+
+/* ---------- AI 解读 ---------- */
+function aiPayload() {
+  const s = state, res = lastRes, mi = res.mi, r2 = (n) => Math.round(n * 100) / 100;
+  let tax = '售价不含税，不扣税';
+  if (mi.tax.type === 'vat') tax = '售价含税 ' + s.vatRate + '%';
+  if (mi.tax.type === 'mx') tax = '综合税费 ' + s.mxTax + '%（' + (s.rfc ? '有' : '无') + ' RFC），' + (s.mxIva ? '佣金另收 16% IVA' : '佣金不另收 IVA');
+  return {
+    商品: s.name || '未命名',
+    市场: mi.label, 当地货币: mi.curName,
+    模式: s.mode === 'reverse' ? '反算（目标利润率 ' + s.target + '%）' : '正算',
+    售价_当地币: r2(res.P), 售价_人民币: r2(res.revenue), 汇率: num(s.rate), 每箱件数: num(s.perBox),
+    平台佣金率: opt(s.commission) + '%', 达人佣金率: opt(s.creator) + '%', 交易手续费率: opt(s.txnFee) + '%',
+    税费规则: tax, 退货率: opt(s.returnRate) + '%', 重发运费_当地币: opt(s.reship),
+    成本构成_每件人民币: breakdown(s, res).map((i) => ({ 项目: i.name, 金额: r2(i.v), 占售价: pct(i.v / res.revenue) })),
+    结果: {
+      不含税收入_当地币: r2(res.N), 单件落地成本_人民币: r2(res.C),
+      每件利润_人民币: r2(res.profit), 每件利润_当地币: r2(res.profitLocal), 利润率: pct(res.margin),
+      保本价_当地币: res.breakEven == null ? '无法保本' : r2(res.breakEven),
+    },
+  };
+}
+$('aiBtn').addEventListener('click', async () => {
+  if (!lastRes || !lastRes.ok) return;
+  const box = $('aiBox'), btn = $('aiBtn');
+  box.hidden = false; box.className = 'ai-box loading'; box.textContent = 'AI 正在解读…';
+  btn.disabled = true;
+  try {
+    const data = await api('POST', '/api/ai', { data: aiPayload() });
+    if (data.ok) { box.className = 'ai-box'; box.textContent = data.text; }
+    else { box.className = 'ai-box err'; box.textContent = data.error; }
+  } catch (e) {
+    box.className = 'ai-box err'; box.textContent = e.message;
+  } finally { btn.disabled = !(lastRes && lastRes.ok); }
+});
+
+/* ---------- 历史记录 ---------- */
+let histItems = [];
+async function loadHistory() {
+  try { histItems = (await api('GET', '/api/history')).items || []; renderHistory(); }
+  catch (e) { $('histList').className = 'empty'; $('histList').textContent = e.message; }
+}
+function renderHistory() {
+  const el = $('histList');
+  if (!histItems.length) { el.className = 'empty'; el.textContent = '还没有保存的记录。'; return; }
+  el.className = '';
+  el.innerHTML = histItems.map((h) => {
+    const m = Number(h.margin);
+    return '<div class="hist-item" data-id="' + esc(h.id) + '"><div style="min-width:0">' +
+      '<div class="t">' + esc(h.name || '未命名商品') + '</div>' +
+      '<div class="m">' + esc(h.marketLabel) + '　售价 ' + money(Number(h.price)) + ' ' + esc(h.curName) +
+      '　利润率 <span class="' + (m < 0 ? 'neg' : '') + '">' + pct(m) + '</span>　' + esc(h.time) + '</div></div>' +
+      '<div class="actions"><button class="btn small" data-hact="open">恢复</button>' +
+      '<button class="btn small danger" data-hact="del">删除</button></div></div>';
+  }).join('');
+}
+$('histList').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-hact]');
+  if (!b) return;
+  const id = b.closest('.hist-item').dataset.id;
+  const h = histItems.find((x) => x.id === id);
+  if (!h) return;
+  if (b.dataset.hact === 'open') {
+    state = normalizeState(clone(h.state));
+    renderAll();
+    $('aiBox').hidden = true;
+    toast('已恢复：' + (h.name || '未命名商品'));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } else {
+    if (!confirm('删除这条记录？「' + (h.name || '未命名商品') + '」')) return;
+    try { await api('DELETE', '/api/history/' + encodeURIComponent(id)); histItems = histItems.filter((x) => x.id !== id); renderHistory(); toast('已删除'); }
+    catch (err) { toast(err.message); }
+  }
+});
+$('saveBtn').addEventListener('click', async () => {
+  const res = lastRes;
+  if (!res || !res.ok) { toast('请先把必填项填完整，算出结果后再保存'); return; }
+  let name = state.name.trim();
+  if (!name) {
+    name = (prompt('给这次核算起个商品名：', '') || '').trim();
+    if (!name) return;
+    state.name = name; renderForm(); saveDraft();
+  }
+  const record = {
+    name, market: state.market, country: state.market === 'SEA' ? state.country : '',
+    marketLabel: res.mi.label, curName: res.mi.curName, mode: state.mode,
+    price: res.P, profit: res.profit, margin: res.margin, breakEven: res.breakEven,
+    state: clone(state),
+  };
+  try { const data = await api('POST', '/api/history', { record }); histItems.unshift(data.item); renderHistory(); toast('已保存'); }
+  catch (e) { toast(e.message); }
+});
+
+/* ---------- 设置 ---------- */
+async function openSettings() {
+  $('settingsModal').classList.add('show');
+  $('setKey').value = '';
+  $('keyState').textContent = '读取中…';
+  try {
+    const s = await api('GET', '/api/settings');
+    $('keyState').innerHTML = s.has_key ? '<span class="saved">已保存</span>（留空则保持不变）' : '未设置';
+    $('setEndpoint').value = s.endpoint; $('setModel').value = s.model;
+  } catch (e) { $('keyState').textContent = e.message; }
+}
+function closeSettings() { $('settingsModal').classList.remove('show'); }
+$('settingsBtn').addEventListener('click', openSettings);
+$('settingsCancel').addEventListener('click', closeSettings);
+$('settingsModal').addEventListener('click', (e) => { if (e.target === $('settingsModal')) closeSettings(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSettings(); });
+$('settingsSave').addEventListener('click', async () => {
+  try {
+    const body = { endpoint: $('setEndpoint').value, model: $('setModel').value.trim() };
+    const key = $('setKey').value.trim();
+    if (key) body.api_key = key;
+    const s = await api('POST', '/api/settings', body);
+    $('setKey').value = '';
+    $('keyState').innerHTML = s.has_key ? '<span class="saved">已保存</span>（留空则保持不变）' : '未设置';
+    $('setModel').value = s.model;
+    toast('设置已保存');
+  } catch (e) { toast(e.message); }
+});
+$('clearKeyBtn').addEventListener('click', async () => {
+  if (!confirm('清除已保存的 ToAPIs Key？')) return;
+  try { await api('POST', '/api/settings', { clear_key: true }); $('keyState').textContent = '未设置'; toast('Key 已清除'); }
+  catch (e) { toast(e.message); }
+});
+
+/* ---------- 启动 ---------- */
+renderAll();
+loadHistory();
+</script>
+</body>
+</html>
