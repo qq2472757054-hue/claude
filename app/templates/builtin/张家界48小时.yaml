@@ -1,0 +1,48 @@
+name: 张家界 48 小时
+cities: [张家界]
+aspects: ["9:16"]
+duration: 30
+subtitle_language: en
+transition: { type: fade, duration: 0.4 }
+fill_mode: blur
+music: { style: 抒情, track: "", volume: 0.6 }
+brand: { logo_corner: true, end_card: true }
+text:
+  hook: "48 hours in Zhangjiajie"
+  hook_zh: "张家界 48 小时"
+  cta: "DM us to plan your trip"
+  cta_zh: "私信我们定制行程"
+  use_llm: false
+subtitle_style:
+  font: Noto Sans SC
+  font_size: 64
+  font_size_zh: 56
+  color: "#FFFFFF"
+  outline_color: "#000000"
+  outline: 4
+  position: bottom
+  box: false
+sections:
+  - name: 开场大景
+    types: [景点]
+    count: 2
+    seconds: [2.5, 3.5]
+    caption: "Avatar mountains, for real"
+    caption_zh: "阿凡达同款山峰"
+  - name: 体验
+    types: [游客互动, 美食]
+    count: 3
+    seconds: [2.5, 4]
+    caption: "Local food & fun with our guests"
+    caption_zh: "跟着游客一起吃喝玩"
+  - name: 导游出镜
+    types: [导游出镜]
+    count: 1
+    seconds: [4, 8]
+    keep_audio: true
+  - name: 收尾
+    types: [景点, 夜景]
+    count: 2
+    seconds: [2.5, 3.5]
+cover: { enabled: true, title: "Zhangjiajie in 48h" }
+color_grade: false

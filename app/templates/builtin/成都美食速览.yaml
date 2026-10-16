@@ -1,0 +1,41 @@
+name: 成都美食速览
+cities: [成都]
+aspects: ["9:16"]
+duration: 20
+subtitle_language: en
+transition: { type: slide, duration: 0.3 }
+fill_mode: crop
+music: { style: 轻快, track: "", volume: 0.6 }
+brand: { logo_corner: true, end_card: true }
+text:
+  hook: "Chengdu food in 20 seconds"
+  hook_zh: "20 秒吃遍成都"
+  cta: "Hungry? DM us"
+  cta_zh: "想吃？私信我们"
+  use_llm: false
+subtitle_style:
+  font: Noto Sans SC
+  font_size: 64
+  font_size_zh: 56
+  color: "#FFFFFF"
+  outline_color: "#000000"
+  outline: 4
+  position: bottom
+  box: true
+sections:
+  - name: 招牌美食
+    types: [美食]
+    count: 4
+    seconds: [2, 3]
+    caption: "Hotpot, noodles, dumplings…"
+    caption_zh: "火锅、面条、抄手……"
+  - name: 吃的人
+    types: [游客互动, 美食]
+    count: 2
+    seconds: [2, 3]
+  - name: 街景
+    types: [景点, 夜景]
+    count: 1
+    seconds: [2, 3]
+cover: { enabled: true, title: "Chengdu Food Rush" }
+color_grade: false

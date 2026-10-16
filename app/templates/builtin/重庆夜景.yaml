@@ -1,0 +1,41 @@
+name: 重庆夜景
+cities: [重庆]
+aspects: ["9:16", "1:1"]
+duration: 30
+subtitle_language: bilingual
+transition: { type: random, duration: 0.5 }
+fill_mode: blur
+music: { style: 城市夜景, track: "", volume: 0.6 }
+brand: { logo_corner: true, end_card: true }
+text:
+  hook: "Chongqing after dark"
+  hook_zh: "夜色重庆"
+  cta: "Plan your Chongqing night with us"
+  cta_zh: "和我们一起来重庆看夜景"
+  use_llm: false
+subtitle_style:
+  font: Noto Sans SC
+  font_size: 60
+  font_size_zh: 52
+  color: "#FFFFFF"
+  outline_color: "#000000"
+  outline: 4
+  position: bottom
+  box: false
+sections:
+  - name: 夜景开场
+    types: [夜景]
+    count: 3
+    seconds: [2.5, 3.5]
+    caption: "The cyberpunk city"
+    caption_zh: "8D 魔幻山城"
+  - name: 景点
+    types: [景点, 夜景]
+    count: 3
+    seconds: [2.5, 3.5]
+  - name: 收尾夜景
+    types: [夜景]
+    count: 2
+    seconds: [3, 4]
+cover: { enabled: true, title: "Chongqing Nights" }
+color_grade: false
