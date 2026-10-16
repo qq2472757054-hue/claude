@@ -78,6 +78,8 @@ def _query(city, mtype, status, pub, kw):
 
 
 def load_table(city, mtype, status, pub, kw):
+    if common.ctx() is None:
+        return gr.update(value=[[False, None] + [""] * 13]), [], banner()
     c, rows = _query(city, mtype, status, pub, kw)
     data = []
     gallery = []
@@ -370,7 +372,7 @@ def build():
             with gr.Row():
                 d_video = gr.Video(label="预览", visible=False, height=360)
                 d_image = gr.Image(label="预览", visible=False, height=360, interactive=False)
-            d_clips = gr.Gallery(label="片段（镜头）", columns=5, height=220, allow_preview=True)
+            d_clips = gr.Gallery(label="片段（镜头）", columns=5, height=220, allow_preview=False, object_fit="contain")
             with gr.Row():
                 d_clip_sel = gr.Dropdown(label="选择片段", choices=[], scale=4)
                 d_toggle = gr.Button("恢复低质量片段 / 标记为低质量", scale=2)

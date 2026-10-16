@@ -187,6 +187,7 @@ def prepare_texts(ctx, template: schema.Template, tl: Timeline, city: str, overr
         if brand_tag:
             tags.append(brand_tag)
         meta["hashtags"] = [x.replace(" ", "") for x in tags if x]
+    meta["hashtags"] = [h.strip().lstrip("#") for h in meta["hashtags"] if h.strip().lstrip("#")]
     return tp, meta
 
 
@@ -242,6 +243,11 @@ def _pick_choices(ctx, job: dict, template, overrides: dict, rng, settings) -> t
     warnings: list[str] = []
     if overrides.get("reuse_plan"):
         choices = [Choice.from_dict(c) for c in overrides["reuse_plan"]]
+        for c in choices:   # 素材可能已移到 已使用/：以数据库中的当前位置为准
+            m = ctx.db.one("SELECT rel_path, status FROM material WHERE id = ?", (c.material_id,))
+            if not m or m["status"] == "丢失" or not ctx.lib.abs(m["rel_path"]).exists():
+                raise JobError(f"原素材找不到了：{c.rel_path}，请勾选替换这个片段")
+            c.rel_path = m["rel_path"]
         replace = set(overrides.get("replace") or [])
         if replace:
             cands = load_candidates(ctx, job["city"], True)

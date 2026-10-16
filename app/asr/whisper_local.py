@@ -15,9 +15,14 @@ _models_lock = threading.Lock()
 
 
 def _decode(path: str | Path):
-    from faster_whisper import decode_audio
+    """用 ffmpeg 解码为 16kHz 单声道 float32（不依赖 PyAV 版本，中文路径也没问题）。"""
+    import numpy as np
 
-    return decode_audio(str(path), sampling_rate=16000)
+    from ..ffrun import ffmpeg
+
+    r = ffmpeg(["-i", str(path), "-vn", "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1"],
+               capture_stdout=True, timeout=1800)
+    return np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
 
 
 class WhisperLocal(ASREngine):

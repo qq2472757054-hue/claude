@@ -1,0 +1,13 @@
+# 运行依赖（Python 3.11+）。便携包由 tools/build_portable.py 自动安装。
+gradio==6.30.0
+numpy>=1.26
+opencv-python-headless>=4.9
+scenedetect==0.7.2
+av>=12
+faster-whisper==1.2.1
+huggingface_hub>=0.23
+Pillow>=10.3
+pillow-heif>=0.16
+PyYAML>=6.0
+openpyxl>=3.1
+openai>=1.40

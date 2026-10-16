@@ -160,7 +160,9 @@ def scan_music(ctx: Ctx) -> int:
             sha = sha256_file(p)
             parts = Path(rel).parts
             style = parts[1] if len(parts) > 2 else ""
-            row = db.one("SELECT id FROM music WHERE sha256 = ?", (sha,))
+            row = db.one("SELECT id, rel_path FROM music WHERE sha256 = ?", (sha,))
+            if row and ctx.lib.abs(row["rel_path"]).is_file():
+                continue  # 内容重复的曲目只登记一次
             if row:
                 db.update("music", row["id"], {"rel_path": rel, "style": style, "missing": 0})
                 continue

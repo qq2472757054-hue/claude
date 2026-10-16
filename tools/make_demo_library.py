@@ -102,7 +102,7 @@ def build(root: Path, small: bool = False) -> list[tuple[Path, str]]:
                                audio="tone" if t == "导游出镜" or n % 2 else "none")
                 made.append((p, t))
     for style in ("轻快", "抒情", "动感", "城市夜景"):
-        make_music(root / "配乐" / style / f"{style}_demo.mp3", 45, seed=len(style))
+        make_music(root / "配乐" / style / f"{style}_demo.mp3", 45, seed=sum(map(ord, style)))
     return made
 
 

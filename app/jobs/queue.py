@@ -139,6 +139,21 @@ def recover(ctx) -> list[str]:
     """启动时：中断的任务标记失败，清理临时目录（保留 失败_* 供排查，7 天后清理）。"""
     notes = []
     for j in ctx.db.all(f"SELECT id FROM job WHERE status IN ({','.join('?' * len(ACTIVE))})", ACTIVE):
+        outs = ctx.db.all("SELECT id FROM output WHERE job_id = ?", (j["id"],))
+        if outs:
+            # 输出已写好、素材还没移动时被关闭：补做素材流转
+            try:
+                plan = json.loads(ctx.db.scalar("SELECT plan_json FROM job WHERE id = ?", (j["id"],)) or "{}")
+                used = [(c["material_id"], c["clip_id"]) for c in plan["timeline"]["choices"]]
+                if not ctx.db.scalar("SELECT COUNT(*) FROM usage WHERE job_id = ?", (j["id"],)):
+                    from ..library import mover
+                    mover.record_success(ctx, j["id"], [o["id"] for o in outs], used,
+                                         ctx.settings["render"].get("move_rule", "any_clip_used"))
+                ctx.db.update("job", j["id"], {"status": "完成", "finished_at": now()})
+                notes.append(f"任务 {j['id']} 的输出已生成，已补做素材流转")
+                continue
+            except (KeyError, json.JSONDecodeError):
+                pass
         ctx.db.update("job", j["id"], {"status": "失败", "error": "程序被关闭，任务中断（素材未移动），可点“重试”",
                                        "finished_at": now()})
         notes.append(f"任务 {j['id']} 在程序关闭时被中断，已标记为失败，素材未移动")
